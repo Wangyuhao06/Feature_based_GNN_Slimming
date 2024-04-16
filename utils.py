@@ -34,6 +34,7 @@ def test_model(test_dataloader, model, device, loss_fcn):
             subgraph, feats, labels = test_data
             feats = feats.to(device)
             labels = labels.to(device)
+            subgraph = subgraph.to(device)
             test_score_list.append(evaluate(feats, model, subgraph, labels.float(), loss_fcn)[0])
         mean_score = np.array(test_score_list).mean()
         print(f"F1-Score on testset:        {mean_score:.4f}")
@@ -68,6 +69,7 @@ def evaluate_model(valid_dataloader, train_dataloader, device, s_model, loss_fcn
             subgraph, feats, labels = valid_data
             feats = feats.to(device)
             labels = labels.to(device)
+            subgraph = subgraph.to(device)
             score, val_loss = evaluate(feats.float(), s_model, subgraph, labels.float(), loss_fcn)
             score_list.append(score)
             val_loss_list.append(val_loss)
@@ -182,9 +184,9 @@ def get_data_loader(args):
     valid_dataloader = DataLoader(valid_dataset, batch_size=args.batch_size, collate_fn=collate, num_workers=2)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=collate, num_workers=2)
 
-    n_classes = train_dataset.labels.shape[1]
-    num_feats = train_dataset.features.shape[1]
-    g = train_dataset.graph
+    g = train_dataset[0][0]
+    n_classes = train_dataset.num_labels
+    num_feats = g.ndata['feat'].shape[1]
     data_info = {}
     data_info['n_classes'] = n_classes
     data_info['num_feats'] = num_feats

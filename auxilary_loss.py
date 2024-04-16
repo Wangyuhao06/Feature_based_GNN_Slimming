@@ -140,7 +140,7 @@ def optimizing(auxiliary_model, loss, model_list):
     for model in model_list:
         auxiliary_model[model]['optimizer'].zero_grad()
     
-    loss.backward()
+    loss.backward(retain_graph = True)
     
     for model in model_list:
         auxiliary_model[model]['optimizer'].step()

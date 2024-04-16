@@ -70,12 +70,14 @@ def train_student(args, auxiliary_model, data, device):
             subgraph, feats, labels = shuffle_data
             fixed_subgraph, fixed_feats, fixed_labels = fixed_data
 
-            num_node = np.mean(subgraph.batch_num_nodes)
+            num_node = np.mean(subgraph.ndata['label'].shape[0])
             feats = feats.to(device)
             feats_num = feats.shape[1]
             labels = labels.to(device)
             fixed_feats = fixed_feats.to(device)
             fixed_labels = fixed_labels.to(device)
+            subgraph = subgraph.to(device)
+            fixed_subgraph = fixed_subgraph.to(device)
 
             feat_gated_s_model.g = subgraph
             for layer in feat_gated_s_model.gat_layers:
@@ -119,8 +121,8 @@ def train_student(args, auxiliary_model, data, device):
                                             fixed_subgraph, fixed_feats, device, class_loss_detach)
                     additional_loss = mi_loss * args.loss_weight
                 
-                weight_loss = sig_sign(feat_gated_s_model.feat_gate_layer.lin.weight).relu().sum()
-                feat_selection_count = feat_gated_s_model.feat_gate_layer.lin.weight.sign().relu().sum()
+                weight_loss = sig_sign(feat_gated_s_model.feat_gate_layer.lin.weight.clone()).relu().sum()
+                feat_selection_count = feat_gated_s_model.feat_gate_layer.lin.weight.clone().sign().relu().sum()
             
             add_weight_loss = weight_loss*0.5/(feats_num**2)
             loss = ce_loss + additional_loss + add_weight_loss
@@ -138,7 +140,7 @@ def train_student(args, auxiliary_model, data, device):
         additional_loss_data = np.array(additional_loss_list).mean()
         with open('losses.csv', mode='a', newline='') as file:
             writer2 = csv.writer(file)
-            writer2.writerow([epoch, loss_data, weight_loss.item()/feats_num])
+            writer2.writerow([epoch, loss_data, avg_selected_channel])
         print(f"Epoch {epoch:05d} | Loss: {loss_data:.4f} | Mi: {additional_loss_data:.4f} | weight_loss: {add_weight_loss_data:.4f} | Feat_num: {avg_selected_channel:.4f} |Time: {time.time()-t0:.4f}s")
         if epoch % 10 == 0:
             score = evaluate_model(valid_dataloader, train_dataloader, device, feat_gated_s_model, loss_fcn)
@@ -167,9 +169,9 @@ def train_teacher(args, model, data, device):
             subgraph, feats, labels = batch_data
             feats = feats.to(device)
             labels = labels.to(device)
-            model.g = subgraph
+            model.g = subgraph.to(device)
             for layer in model.gat_layers:
-                layer.g = subgraph
+                layer.g = subgraph.to(device)
             logits = model(feats.float())
             loss = loss_fcn(logits, labels.float())
             optimizer.zero_grad()
@@ -185,6 +187,7 @@ def train_teacher(args, model, data, device):
                 subgraph, feats, labels = valid_data
                 feats = feats.to(device)
                 labels = labels.to(device)
+                subgraph = subgraph.to(device)
                 score, val_loss = evaluate(feats.float(), model, subgraph, labels.float(), loss_fcn)
                 score_list.append(score)
                 val_loss_list.append(val_loss)
@@ -199,6 +202,7 @@ def train_teacher(args, model, data, device):
                 subgraph, feats, labels = train_data
                 feats = feats.to(device)
                 labels = labels.to(device)
+                subgraph = subgraph.to(device)
                 train_score_list.append(evaluate(feats, model, subgraph, labels.float(), loss_fcn)[0])
             print(f"F1-Score on trainset:        {np.array(train_score_list).mean():.4f}")
 
@@ -209,6 +213,7 @@ def train_teacher(args, model, data, device):
         subgraph, feats, labels = test_data
         feats = feats.to(device)
         labels = labels.to(device)
+        subgraph = subgraph.to(device)
         test_score_list.append(evaluate(feats, model, subgraph, labels.float(), loss_fcn)[0])
     print(f"F1-Score on testset:        {np.array(test_score_list).mean():.4f}")
     
@@ -222,13 +227,13 @@ def main(args):
     t_model = model_dict['t_model']['model']
 
     # load or train the teacher
-    load_checkpoint(t_model, "./models/t_model.pt", device)
-    # if os.path.isfile("./models/t_model.pt"):
-    #     load_checkpoint(t_model, "./models/t_model.pt", device)
-    # else:
-    #     print("############ train teacher #############")
-    #     train_teacher(args, t_model, data, device)
-    #     save_checkpoint(t_model, "./models/t_model.pt")
+    # load_checkpoint(t_model, "./models/t_model.pt", device)
+    if os.path.isfile("./models/t_model.pt"):
+        load_checkpoint(t_model, "./models/t_model.pt", device)
+    else:
+        print("############ train teacher #############")
+        train_teacher(args, t_model, data, device)
+        save_checkpoint(t_model, "./models/t_model.pt")
 
     
 
@@ -251,7 +256,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--gpu", type=int, default=-1,
+    parser.add_argument("--gpu", type=int, default=0,
                         help="which GPU to use. Set -1 to use CPU.")
     parser.add_argument("--residual", action="store_true", default=True,
                         help="use residual connection")
@@ -281,7 +286,7 @@ if __name__ == '__main__':
     parser.add_argument("--t-num-hidden", type=int, default=256,
                         help="number of hidden units")
 
-    parser.add_argument("--s-epochs", type=int, default=500,
+    parser.add_argument("--s-epochs", type=int, default=1000,
                         help="number of training epochs")
     parser.add_argument("--s-num-heads", type=int, default=2,
                         help="number of hidden attention heads")
