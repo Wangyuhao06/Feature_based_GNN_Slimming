@@ -19,6 +19,9 @@ import matplotlib.pyplot as plt
 import collections
 import random
 
+from BNN_layers import sig_sign
+import csv
+
 torch.set_num_threads(1)
 
 def train_student(args, auxiliary_model, data, device):
@@ -34,6 +37,10 @@ def train_student(args, auxiliary_model, data, device):
                 "model_name": {'model','optimizer','epoch_num'}
             }
     '''
+    with open('losses.csv', mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'loss', 'feat_num'])
+
     best_score = 0
     best_loss = 1000.0
 
@@ -53,7 +60,9 @@ def train_student(args, auxiliary_model, data, device):
     for epoch in range(args.s_epochs):
         feat_gated_s_model.train()
         loss_list = []
+        weight_loss_list = []
         additional_loss_list = []
+        feat_selection_count_list = []
         t0 = time.time()
         for batch, batch_data in enumerate( zip(train_dataloader,fixed_train_dataloader) ):
             step_n += 1
@@ -61,7 +70,9 @@ def train_student(args, auxiliary_model, data, device):
             subgraph, feats, labels = shuffle_data
             fixed_subgraph, fixed_feats, fixed_labels = fixed_data
 
+            num_node = np.mean(subgraph.batch_num_nodes)
             feats = feats.to(device)
+            feats_num = feats.shape[1]
             labels = labels.to(device)
             fixed_feats = fixed_feats.to(device)
             fixed_labels = fixed_labels.to(device)
@@ -107,17 +118,28 @@ def train_student(args, auxiliary_model, data, device):
                     mi_loss = gen_mi_loss(auxiliary_model, middle_feats_s[args.target_layer], subgraph, feats, 
                                             fixed_subgraph, fixed_feats, device, class_loss_detach)
                     additional_loss = mi_loss * args.loss_weight
+                
+                weight_loss = sig_sign(feat_gated_s_model.feat_gate_layer.lin.weight).relu().sum()
+                feat_selection_count = feat_gated_s_model.feat_gate_layer.lin.weight.sign().relu().sum()
             
-            loss = ce_loss + additional_loss
+            add_weight_loss = weight_loss*0.5/(feats_num**2)
+            loss = ce_loss + additional_loss + add_weight_loss
 
             #optimizing(auxiliary_model, loss, ['s_model', 'local_model', 'local_model_s'])
-            optimizing(auxiliary_model, loss, ['s_model'])
+            optimizing(auxiliary_model, loss, ['feat_gated_s_model'])
             loss_list.append(loss.item())
+            weight_loss_list.append(add_weight_loss.item())
+            feat_selection_count_list.append(feat_selection_count.item())
             additional_loss_list.append(additional_loss.item() if additional_loss!=0 else 0)
 
         loss_data = np.array(loss_list).mean()
+        add_weight_loss_data = np.array(weight_loss_list).mean()
+        avg_selected_channel = np.array(feat_selection_count_list).mean()
         additional_loss_data = np.array(additional_loss_list).mean()
-        print(f"Epoch {epoch:05d} | Loss: {loss_data:.4f} | Mi: {additional_loss_data:.4f} | Time: {time.time()-t0:.4f}s")
+        with open('losses.csv', mode='a', newline='') as file:
+            writer2 = csv.writer(file)
+            writer2.writerow([epoch, loss_data, weight_loss.item()/feats_num])
+        print(f"Epoch {epoch:05d} | Loss: {loss_data:.4f} | Mi: {additional_loss_data:.4f} | weight_loss: {add_weight_loss_data:.4f} | Feat_num: {avg_selected_channel:.4f} |Time: {time.time()-t0:.4f}s")
         if epoch % 10 == 0:
             score = evaluate_model(valid_dataloader, train_dataloader, device, feat_gated_s_model, loss_fcn)
             if score > best_score or loss_data < best_loss:
@@ -200,24 +222,26 @@ def main(args):
     t_model = model_dict['t_model']['model']
 
     # load or train the teacher
-    if os.path.isfile("./models/t_model.pt"):
-        load_checkpoint(t_model, "./models/t_model.pt", device)
-    else:
-        print("############ train teacher #############")
-        train_teacher(args, t_model, data, device)
-        save_checkpoint(t_model, "./models/t_model.pt")
+    load_checkpoint(t_model, "./models/t_model.pt", device)
+    # if os.path.isfile("./models/t_model.pt"):
+    #     load_checkpoint(t_model, "./models/t_model.pt", device)
+    # else:
+    #     print("############ train teacher #############")
+    #     train_teacher(args, t_model, data, device)
+    #     save_checkpoint(t_model, "./models/t_model.pt")
+
     
 
     print(f"number of parameter for teacher model: {parameters(t_model)}")
-    print(f"number of parameter for student model: {parameters(model_dict['s_model']['model'])}")
+    print(f"number of parameter for student model: {parameters(model_dict['feat_gated_s_model']['model'])}")
 
     # verify the teacher model
     loss_fcn = torch.nn.BCEWithLogitsLoss()
     train_dataloader, _, test_dataloader, _ = data
-    print(f"test acc of teacher:")
-    test_model(test_dataloader, t_model, device, loss_fcn)
-    print(f"train acc of teacher:")
-    test_model(train_dataloader, t_model, device, loss_fcn)
+    # print(f"test acc of teacher:")
+    # test_model(test_dataloader, t_model, device, loss_fcn)
+    # print(f"train acc of teacher:")
+    # test_model(train_dataloader, t_model, device, loss_fcn)
     
 
     print("############ train student with teacher #############")
@@ -227,7 +251,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
-    parser.add_argument("--gpu", type=int, default=1,
+    parser.add_argument("--gpu", type=int, default=-1,
                         help="which GPU to use. Set -1 to use CPU.")
     parser.add_argument("--residual", action="store_true", default=True,
                         help="use residual connection")

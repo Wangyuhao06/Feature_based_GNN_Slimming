@@ -1,13 +1,39 @@
-from torch_geometric.nn.conv import MessagePassing, SAGEConv, GraphConv
-from torch_geometric.utils import add_self_loops, degree
 import torch
 import math
 from torch.nn import Linear
 import torch.nn.functional as F
-import torch_sparse
-from torch_scatter import scatter_add
 from torch.autograd import Function
 from torch.optim import Adam
+
+# ------------- Sign_fuction_for_loss ------------#
+sign_th = 0.5
+class sigmoid_sign(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        return input.sigmoid()-sign_th
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        sigmoid = input.sigmoid()
+        sigmoid_grad = sigmoid * (1 - sigmoid)
+        grad_input = grad_output * sigmoid_grad
+        return grad_input
+sig_sign = sigmoid_sign.apply
+
+class GradedSign(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        return input.sign()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_input = grad_output.clone()
+        grad_input[grad_input != 0] = 0.1  # 非零处传递小的梯度
+        return grad_input
+
+gd_sign = GradedSign.apply
 
 # ------------- Binary_Layer ------------#
 class BinLinearFunction(Function):
